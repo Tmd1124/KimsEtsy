@@ -289,18 +289,10 @@
     font-size: .78rem;
     margin-top: .6rem;
   }
-
-  /* ---------- Landing page (generated) ---------- */
-  .landing-overlay {
-    display: none;
-    position: fixed;
-    inset: 0;
-    z-index: 100;
-    overflow-y: auto;
-    background: var(--lp-paper);
-  }
-  .landing-overlay.open { display: block; }
-
+</style>
+<style id="lp-styles">
+  /* Landing page (generated) — copied into the new tab it opens in, via
+     this element's textContent, so it must stay a self-contained block. */
   .lp-root {
     --lp-paper: #F8F5EF;
     --lp-ink: #1D1B17;
@@ -695,8 +687,6 @@
 
   <div class="grid" id="grid"></div>
 
-  <div id="landing-overlay" class="landing-overlay"></div>
-
   <script>
     const input = document.getElementById('shop-input');
     const btn = document.getElementById('search-btn');
@@ -707,7 +697,6 @@
     const listingSelect = document.getElementById('listing-select');
     const socialSelect = document.getElementById('social-select');
     const detail = document.getElementById('detail');
-    const landingOverlay = document.getElementById('landing-overlay');
     let currentListing = null;
 
     async function search() {
@@ -914,6 +903,17 @@
       if (!currentListing) return;
       const btn = document.getElementById('create-landing-btn');
       const originalLabel = btn.textContent;
+
+      // Open the tab synchronously, in direct response to the click — opening
+      // it after the awaited fetch below would get blocked as a popup.
+      const newTab = window.open('', '_blank');
+      if (!newTab) {
+        alert('Please allow pop-ups for this site to open the landing page in a new tab.');
+        return;
+      }
+      newTab.document.write('<!DOCTYPE html><title>Loading…</title><body style="font-family:sans-serif;padding:2rem;color:#57534A;">Writing your landing page…</body>');
+      newTab.document.close();
+
       btn.disabled = true;
       btn.textContent = 'Writing your landing page…';
 
@@ -939,33 +939,74 @@
         const copy = await res.json();
 
         if (!res.ok) {
-          alert(copy.error || 'Failed to generate landing page copy.');
+          newTab.document.body.textContent = copy.error || 'Failed to generate landing page copy.';
           return;
         }
 
-        landingOverlay.innerHTML = renderLandingPage(l, copy, price);
-        landingOverlay.classList.add('open');
-        landingOverlay.scrollTop = 0;
-        document.getElementById('lp-close-btn').addEventListener('click', () => {
-          landingOverlay.classList.remove('open');
-          landingOverlay.innerHTML = '';
-        });
-
-        const platformInit = {
-          pinterest: initPinterestPosting,
-          facebook: initFacebookPosting,
-          instagram: initInstagramPosting,
-          tiktok: initTikTokPosting,
-        };
-        for (const post of copy.socialPosts || []) {
-          platformInit[post.platform]?.(l, post);
-        }
+        newTab.document.open();
+        newTab.document.write(buildLandingPageDocument(l, copy, price));
+        newTab.document.close();
       } catch (err) {
-        alert('Failed to reach the server: ' + err.message);
+        newTab.document.body.textContent = 'Failed to reach the server: ' + err.message;
       } finally {
         btn.disabled = false;
         btn.textContent = originalLabel;
       }
+    }
+
+    // Builds a fully self-contained HTML document (styles + interactivity
+    // inlined) for the new tab createLandingPage() opens — the new tab has
+    // no access to this page's script scope once it navigates its own
+    // document, so the posting handlers are serialized in via .toString().
+    function buildLandingPageDocument(l, copy, price) {
+      const styles = document.getElementById('lp-styles').textContent;
+      const bodyHtml = renderLandingPage(l, copy, price);
+      // Neutralize "<" so nothing in listing/copy data (both external,
+      // untrusted text) can break out of the inline <script> block below.
+      const safeListing = JSON.stringify(l).replace(/</g, '\\u003c');
+      const safePosts = JSON.stringify(copy.socialPosts || []).replace(/</g, '\\u003c');
+
+      return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>${escapeHtml(copy.headline)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
+<style>${styles}</style>
+</head>
+<body>
+${bodyHtml}
+<script>
+${escapeHtml.toString()}
+${initPinterestPosting.toString()}
+${initFacebookPosting.toString()}
+${initInstagramPosting.toString()}
+${initTikTokPosting.toString()}
+
+document.getElementById('lp-close-btn')?.addEventListener('click', () => window.close());
+document.body.addEventListener('click', async e => {
+  const copyBtn = e.target.closest('.lp-copy-btn');
+  if (!copyBtn) return;
+  try {
+    await navigator.clipboard.writeText(copyBtn.dataset.copy);
+    const original = copyBtn.textContent;
+    copyBtn.textContent = 'Copied!';
+    setTimeout(() => { copyBtn.textContent = original; }, 1500);
+  } catch (err) {
+    alert('Could not copy — your browser blocked clipboard access.');
+  }
+});
+
+const listing = ${safeListing};
+const socialPosts = ${safePosts};
+const platformInit = { pinterest: initPinterestPosting, facebook: initFacebookPosting, instagram: initInstagramPosting, tiktok: initTikTokPosting };
+for (const post of socialPosts) { platformInit[post.platform]?.(listing, post); }
+<\/script>
+</body>
+</html>`;
     }
 
     function renderLandingPage(l, copy, price) {
@@ -981,7 +1022,7 @@
 
       return `
         <div class="lp-root">
-          <button id="lp-close-btn" class="lp-close">← Back to shop</button>
+          <button id="lp-close-btn" class="lp-close">✕ Close tab</button>
 
           <section class="lp-hero">
             <div class="lp-hero-media">
@@ -1303,19 +1344,6 @@
     btn.addEventListener('click', search);
     input.addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
     listingSelect.addEventListener('change', e => showListingDetail(e.target.value));
-
-    landingOverlay.addEventListener('click', async e => {
-      const copyBtn = e.target.closest('.lp-copy-btn');
-      if (!copyBtn) return;
-      try {
-        await navigator.clipboard.writeText(copyBtn.dataset.copy);
-        const original = copyBtn.textContent;
-        copyBtn.textContent = 'Copied!';
-        setTimeout(() => { copyBtn.textContent = original; }, 1500);
-      } catch {
-        alert('Could not copy — your browser blocked clipboard access.');
-      }
-    });
   </script>
 </body>
 </html>
